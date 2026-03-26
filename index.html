@@ -47,7 +47,7 @@ let player = {
 };
 
 const keys = {};
-window.onkeydown = e => { keys[e.code] = true; if(e.code === 'KeyK') dash(); };
+window.onkeydown = e => { keys[e.code] = true; if(e.code === 'KeyShift') dash(); };
 window.onkeyup = e => keys[e.code] = false;
 
 function generateLevel() {
