@@ -2,18 +2,20 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Brick Dungeon Crawler</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brick Crawler: Endless Dungeon</title>
     <style>
-        body { margin: 0; background: #1a1a1a; color: #eee; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
-        canvas { background: #2c3e50; border: 4px solid #34495e; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
-        .ui { position: absolute; top: 20px; text-align: center; pointer-events: none; }
-        .controls { margin-top: 10px; color: #888; font-size: 0.8rem; }
+        body { margin: 0; background: #1a1a1a; color: #eee; font-family: 'Courier New', Courier, monospace; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        canvas { border: 4px solid #444; box-shadow: 0 0 20px rgba(0,0,0,0.5); background: #222; image-rendering: pixelated; }
+        .ui { position: absolute; top: 20px; text-align: center; pointer-events: none; width: 100%; }
+        h1 { margin: 0; font-size: 24px; color: #e74c3c; text-shadow: 2px 2px #000; }
+        .stats { font-size: 18px; margin-top: 5px; }
     </style>
 </head>
 <body>
     <div class="ui">
-        <h1 id="score">Rooms Cleared: 0</h1>
-        <div class="controls">WASD to Move | Shift to Dash | Space to Jump</div>
+        <h1>BRICK CRAWLER</h1>
+        <div class="stats">Rooms Cleared: <span id="score">0</span> | Dash: <span id="dash">READY</span></div>
     </div>
     <canvas id="gameCanvas"></canvas>
 
@@ -21,220 +23,135 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const scoreEl = document.getElementById('score');
+const dashEl = document.getElementById('dash');
 
-canvas.width = 800;
+canvas.width = 400;
 canvas.height = 600;
 
 // Game Constants
-const TILE_SIZE = 40;
-const COLS = canvas.width / TILE_SIZE;
-const ROWS = canvas.height / TILE_SIZE;
 const GRAVITY = 0.4;
 const FRICTION = 0.8;
 const JUMP_FORCE = -8;
-const DASH_SPEED = 12;
+const WALL_JUMP_X = 6;
+const DASH_FORCE = 12;
+const TILE_SIZE = 40;
 
 let score = 0;
-let level = [];
-let player = {
-    x: 50, y: 50, w: 30, h: 30,
+let particles = [];
+
+// Player Object
+const player = {
+    x: 200, y: 500, w: 20, h: 20,
     vx: 0, vy: 0,
     onGround: false,
+    onWall: 0, // -1 left, 1 right, 0 none
     canDash: true,
-    isDashing: 0,
-    wallSliding: false,
-    facing: 1 // 1 for right, -1 for left
+    isDashing: false,
+    color: '#3498db'
 };
 
 const keys = {};
-window.onkeydown = e => { keys[e.code] = true; if(e.code === 'KeyShift') dash(); };
-window.onkeyup = e => keys[e.code] = false;
+window.onkeydown = (e) => keys[e.code] = true;
+window.onkeyup = (e) => keys[e.code] = false;
 
-function generateLevel() {
-    level = [];
-    // Fill with empty space
-    for(let y = 0; y < ROWS; y++) {
-        level[y] = [];
-        for(let x = 0; x < COLS; x++) {
-            // Borders
-            if(x === 0 || x === COLS-1 || y === 0 || y === ROWS-1) level[y][x] = 'brick';
-            else level[y][x] = 'air';
-        }
-    }
+let platforms = [];
 
-    // Simple Procedural Path (Guarantees exit is reachable)
-    let curX = 1;
-    let curY = ROWS - 2;
-    player.x = curX * TILE_SIZE;
-    player.y = curY * TILE_SIZE;
+function generateRoom() {
+    platforms = [];
+    // Floor
+    platforms.push({x: 0, y: canvas.height - 20, w: canvas.width, h: 20, type: 'wall'});
+    // Walls
+    platforms.push({x: 0, y: 0, w: 20, h: canvas.height, type: 'wall'});
+    platforms.push({x: canvas.width - 20, y: 0, w: 20, h: canvas.height, type: 'wall'});
+    // Exit (Top)
+    platforms.push({x: 150, y: 0, w: 100, h: 10, type: 'exit'});
 
-    // Create a "drunkard's walk" path to the exit
-    while(curX < COLS - 2) {
-        let step = Math.random();
-        if(step < 0.6) curX++; 
-        else if(step < 0.8 && curY > 2) curY--;
-        else if(curY < ROWS - 3) curY++;
+    // Random Procedural Platforms
+    for(let i = 0; i < 8; i++) {
+        let x = 40 + Math.random() * (canvas.width - 120);
+        let y = 80 + (i * 60);
+        let w = 60 + Math.random() * 40;
+        platforms.push({x, y, w, h: 15, type: 'wall'});
         
-        level[curY][curX] = 'air';
-        level[curY+1][curX] = 'brick'; // Floor
-    }
-    level[curY][COLS-2] = 'door';
-
-    // Add random hazards
-    for(let i = 0; i < 15; i++) {
-        let rx = Math.floor(Math.random() * (COLS-2)) + 1;
-        let ry = Math.floor(Math.random() * (ROWS-2)) + 1;
-        if(level[ry][rx] === 'air' && level[ry+1][rx] === 'brick') {
-            level[ry][rx] = Math.random() > 0.5 ? 'spike' : 'air';
-        }
-        if(level[ry+1][rx] === 'brick' && Math.random() > 0.8) {
-             level[ry+1][rx] = 'pit'; // Bottomless pit
+        // Add random spikes
+        if(Math.random() > 0.7) {
+            platforms.push({x: x + 10, y: y - 10, w: 20, h: 10, type: 'spike'});
         }
     }
 }
 
-function dash() {
-    if(player.canDash) {
-        player.isDashing = 10;
-        player.canDash = false;
-        player.vy = 0;
-    }
+function resetPlayer() {
+    player.x = 200;
+    player.y = canvas.height - 60;
+    player.vx = 0;
+    player.vy = 0;
+    player.canDash = true;
 }
 
 function update() {
-    // Movement logic
-    if (player.isDashing > 0) {
-        player.vx = player.facing * DASH_SPEED;
-        player.isDashing--;
-    } else {
-        if (keys['KeyA'] || keys['ArrowLeft']) { player.vx -= 0.8; player.facing = -1; }
-        if (keys['KeyD'] || keys['ArrowRight']) { player.vx += 0.8; player.facing = 1; }
-        player.vx *= FRICTION;
-        player.vy += GRAVITY;
-    }
-
+    // Movement Logic
+    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= 0.8;
+    if (keys['ArrowRight'] || keys['KeyD']) player.vx += 0.8;
+    
     // Jump
-    if ((keys['Space'] || keys['KeyW']) && player.onGround) {
+    if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
         player.vy = JUMP_FORCE;
         player.onGround = false;
+    } 
+    // Wall Jump
+    else if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onWall !== 0) {
+        player.vy = JUMP_FORCE;
+        player.vx = -player.onWall * WALL_JUMP_X;
+        player.onWall = 0;
     }
 
-    // Update Position
+    // Dash
+    if (keys['ShiftLeft'] && player.canDash) {
+        player.isDashing = true;
+        player.canDash = false;
+        let dx = (keys['ArrowRight'] || keys['KeyD']) ? 1 : (keys['ArrowLeft'] || keys['KeyA']) ? -1 : 0;
+        let dy = (keys['ArrowDown'] || keys['KeyS']) ? 1 : (keys['ArrowUp'] || keys['KeyW']) ? -1 : 0;
+        if(dx === 0 && dy === 0) dx = 1; // Default dash
+        player.vx = dx * DASH_FORCE;
+        player.vy = dy * DASH_FORCE;
+        setTimeout(() => { player.isDashing = false; }, 150);
+    }
+
+    if (!player.isDashing) {
+        player.vy += GRAVITY;
+        player.vx *= FRICTION;
+    }
+
     player.x += player.vx;
-    checkCollisions('x');
     player.y += player.vy;
-    checkCollisions('y');
 
-    // Bounds/Death check
-    if(player.y > canvas.height) resetGame();
+    // Collision & Mechanics
+    player.onGround = false;
+    player.onWall = 0;
 
-    draw();
-    requestAnimationFrame(update);
-}
+    platforms.forEach(p => {
+        if (player.x < p.x + p.w && player.x + player.w > p.x &&
+            player.y < p.y + p.h && player.y + player.h > p.y) {
+            
+            if (p.type === 'spike') {
+                score = 0;
+                scoreEl.innerText = score;
+                resetPlayer();
+                generateRoom();
+            } else if (p.type === 'exit') {
+                score++;
+                scoreEl.innerText = score;
+                resetPlayer();
+                generateRoom();
+            } else {
+                // Resolve Wall/Floor collision
+                let overlapX = Math.min(player.x + player.w - p.x, p.x + p.w - player.x);
+                let overlapY = Math.min(player.y + player.h - p.y, p.y + p.h - player.y);
 
-function checkCollisions(axis) {
-    player.wallSliding = false;
-    for(let y = 0; y < ROWS; y++) {
-        for(let x = 0; x < COLS; x++) {
-            if(level[y][x] === 'air') continue;
-
-            let tx = x * TILE_SIZE;
-            let ty = y * TILE_SIZE;
-
-            if(player.x < tx + TILE_SIZE && player.x + player.w > tx &&
-               player.y < ty + TILE_SIZE && player.y + player.h > ty) {
-                
-                if(level[y][x] === 'door') {
-                    score++;
-                    scoreEl.innerText = `Rooms Cleared: ${score}`;
-                    generateLevel();
-                    return;
-                }
-                
-                if(level[y][x] === 'spike' || level[y][x] === 'pit') {
-                    resetGame();
-                    return;
-                }
-
-                if(level[y][x] === 'brick') {
-                    if(axis === 'x') {
-                        if(player.vx > 0) player.x = tx - player.w;
-                        if(player.vx < 0) player.x = tx + TILE_SIZE;
-                        // Wall Jump Logic
-                        if(!player.onGround && player.vy > 0) {
-                            player.wallSliding = true;
-                            if(keys['Space']) {
-                                player.vy = JUMP_FORCE;
-                                player.vx = player.vx > 0 ? -7 : 7;
-                            }
-                        }
-                        player.vx = 0;
-                    } else {
-                        if(player.vy > 0) {
-                            player.y = ty - player.h;
-                            player.onGround = true;
-                            player.canDash = true;
-                        }
-                        if(player.vy < 0) player.y = ty + TILE_SIZE;
-                        player.vy = 0;
-                    }
-                }
-            }
-        }
-    }
-}
-
-function resetGame() {
-    score = 0;
-    scoreEl.innerText = `Rooms Cleared: 0`;
-    generateLevel();
-}
-
-function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    for(let y = 0; y < ROWS; y++) {
-        for(let x = 0; x < COLS; x++) {
-            let tx = x * TILE_SIZE;
-            let ty = y * TILE_SIZE;
-            if(level[y][x] === 'brick') {
-                ctx.fillStyle = '#5d4037';
-                ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
-                ctx.strokeStyle = '#3e2723';
-                ctx.strokeRect(tx, ty, TILE_SIZE, TILE_SIZE);
-            } else if(level[y][x] === 'spike') {
-                ctx.font = '30px serif';
-                ctx.fillText('🌵', tx + 5, ty + 30);
-            } else if(level[y][x] === 'door') {
-                ctx.font = '30px serif';
-                ctx.fillText('🚪', tx + 5, ty + 30);
-            } else if(level[y][x] === 'pit') {
-                ctx.fillStyle = '#1a1a1a';
-                ctx.fillRect(tx, ty, TILE_SIZE, TILE_SIZE);
-            }
-        }
-    }
-
-    // Draw Player
-    ctx.font = '24px serif';
-    ctx.save();
-    if(player.facing === -1) {
-        ctx.scale(-1, 1);
-        ctx.fillText('🏃', -player.x - player.w, player.y + 25);
-    } else {
-        ctx.fillText('🏃', player.x, player.y + 25);
-    }
-    ctx.restore();
-
-    // Dash trail effect
-    if(player.isDashing > 0) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.fillRect(player.x, player.y, player.w, player.h);
-    }
-}
-
-generateLevel();
-update();
-</script>
-</body>
-</html>
+                if (overlapX < overlapY) {
+                    player.vx = 0;
+                    player.x += (player.x < p.x) ? -overlapX : overlapX;
+                    player.onWall = (player.x < p.x) ? 1 : -1;
+                } else {
+                    player.vy = 0;
+                    player.y += (player.y < p.y) ? -overlapY :
